@@ -141,16 +141,11 @@ async def on_message(message):
                     print(f"❌ エラー: {e}")
 
 # --- 6. 起動実行 ---
+# --- 6. 起動実行 (これを貼り付け) ---
 if __name__ == "__main__":
-    print("🚀 Starting Web Server for Port Binding...")
-    keep_alive()  # 最初にWebサーバーを起動
-    
-    print("🤖 Starting Discord Bot...")
+    keep_alive()
     if TOKEN:
+        print("🚀 Starting Bot...")
         bot.run(TOKEN)
     else:
-        print("❌ DISCORD_TOKEN が設定されていません。Environmentタブを確認してください。")
-if __name__ == "__main__":
-    print("🚀 Starting Server...")
-    keep_alive()
-    bot.run(TOKEN)
+        print("❌ TOKEN NOT FOUND")
