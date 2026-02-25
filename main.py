@@ -150,3 +150,6 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     else:
         print("❌ DISCORD_TOKEN が設定されていません。Environmentタブを確認してください。")
+        if __name__ == "__main__":
+    keep_alive()  # Web窓口を先に開く
+    bot.run(TOKEN) # その後にボットを動かす
