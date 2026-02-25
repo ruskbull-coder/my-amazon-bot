@@ -16,7 +16,6 @@ def home():
     return "Bot is running!"
 
 def run_web():
-    # Renderのポートスキャンに対応
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -30,8 +29,13 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN') or os.getenv('DISCORD_BOT_TOKEN')
 AMAZON_TAG = os.getenv('AMAZON_TAG', 'default-tag-22')
 
+# Amazonのブロックを回避するための「人間らしい」ヘッダー
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Referer': 'https://www.google.com/',
 }
 
 CURRENCY_MAP = {
@@ -48,23 +52,26 @@ def scrape_amazon_localized(url):
     domain_match = re.search(r'amazon\.([a-z\.]+)', url)
     domain_suffix = domain_match.group(1) if domain_match else 'co.jp'
     
-    cookies = {}
-    if domain_suffix == 'com':
-        cookies = {'i18n-prefs': 'USD', 'lc-main': 'en_US'}
-    elif domain_suffix == 'co.jp':
-        cookies = {'i18n-prefs': 'JPY', 'lc-main': 'ja_JP'}
+    cookies = {'i18n-prefs': 'JPY', 'lc-main': 'ja_JP'} if domain_suffix == 'co.jp' else {}
 
     try:
-        response = session.get(url, headers=HEADERS, cookies=cookies, timeout=15, allow_redirects=True)
+        response = session.get(url, headers=HEADERS, cookies=cookies, timeout=15)
+        # もしAmazonに弾かれたらここで終了
+        if response.status_code != 200:
+            print(f"⚠️ Amazon Access Denied (Status: {response.status_code})")
+            return "Amazon Product", "N/A", "N/A", "0", "", None, f"amazon.{domain_suffix}"
+
         soup = BeautifulSoup(response.text, 'html.parser')
         final_url = response.url
         
+        # 1. 商品名
         title_elem = soup.find(id='productTitle') or soup.find('meta', property='og:title')
         title_text = "Amazon Product"
         if title_elem:
             title_text = title_elem.get_text().strip() if not title_elem.get('content') else title_elem.get('content')
             title_text = title_text.replace('Amazon | ', '').replace('Amazon.com: ', '')
 
+        # 2. 価格
         price_elem = soup.select_one('.a-price .a-offscreen') or soup.select_one('.a-price-whole') or soup.select_one('.a-color-price')
         price_raw = price_elem.get_text().strip() if price_elem else "N/A"
         
@@ -72,6 +79,7 @@ def scrape_amazon_localized(url):
         if price_raw != "N/A" and not any(s in price_raw for s in ['￥', '$', '£', '€']):
             price_raw = f"{symbol}{price_raw}"
 
+        # 3. 星評価
         rating_val = "N/A"
         selectors = ['span.a-icon-alt', 'span[data-hook="rating-out-of-text"]', '#acrPopover']
         for selector in selectors:
@@ -82,15 +90,18 @@ def scrape_amazon_localized(url):
                     rating_val = f"⭐ {match.group(1)}"
                     break
 
+        # 4. レビュー数
         review_elem = soup.find(id='acrCustomerReviewText')
         reviews = "0"
         if review_elem:
             count = re.sub(r'\D', '', review_elem.get_text())
             if count: reviews = "{:,}".format(int(count))
 
+        # 5. 画像
         img_elem = soup.find(id='landingImage') or soup.find('meta', property='og:image')
         image = img_elem.get('src') if img_elem and not img_elem.get('content') else (img_elem.get('content') if img_elem else "")
 
+        # 6. ASIN抽出
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', final_url)
         asin = asin_match.group(1) if asin_match else None
 
@@ -141,7 +152,6 @@ async def on_message(message):
                     print(f"❌ エラー: {e}")
 
 # --- 6. 起動実行 ---
-# --- 6. 起動実行 (これを貼り付け) ---
 if __name__ == "__main__":
     keep_alive()
     if TOKEN:
