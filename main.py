@@ -126,27 +126,44 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot: return
     
+    # メッセージ内からURLをすべて抽出
     urls = re.findall(r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+', message.content)
-    if urls and ("amazon" in urls[0] or "amzn" in urls[0]):
-        print(f"🔎 Processing: {urls[0]}")
-        title, price, rating, reviews, image, asin, domain = scrape_amazon_localized(urls[0])
+    if not urls: return
+
+    target_url = urls[0] # 最初に見つけたURLを対象にする
+    
+    # --- A. Amazonの場合 (既存の処理) ---
+    if "amazon" in target_url or "amzn" in target_url:
+        print(f"🔎 Amazon検出: {target_url}")
+        embed = process_url(target_url, message.author)
+        if embed:
+            try:
+                await message.delete()
+                await message.channel.send(embed=embed)
+            except:
+                await message.channel.send(embed=embed)
+            return
+
+    # --- B. Amazon以外で80文字を超えている場合 ---
+    if len(target_url) > 80:
+        print(f"✂️ 長いURLを短縮表示: {len(target_url)}文字")
         
-        # リンク生成
-        clean_url = f"https://{domain}/dp/{asin}" if asin else urls[0].split('?')[0]
-        tagged_url = f"{clean_url}?tag={AMAZON_TAG}" if "co.jp" in domain else clean_url
+        # ドメイン名を抽出 (例: www.google.com)
+        domain = re.search(r'https?://([^/]+)', target_url).group(1)
         
-        embed = discord.Embed(title=title, url=tagged_url, color=0xff9900)
-        embed.add_field(name="価格", value=price, inline=True)
-        embed.add_field(name="評価", value=rating, inline=True)
-        embed.add_field(name="レビュー", value=reviews, inline=True)
-        if image: embed.set_thumbnail(url=image)
-        embed.set_footer(text=f"Shared by {message.author.display_name} | {domain}")
+        # シンプルな埋め込みを作成
+        short_embed = discord.Embed(
+            title="🔗 長いURLを整理しました",
+            description=f"[{domain} へ移動する]({target_url})",
+            color=discord.Color.light_grey()
+        )
+        short_embed.set_footer(text=f"Shared by {message.author.display_name} | 元の長さ: {len(target_url)}文字")
         
         try:
             await message.delete()
-            await message.channel.send(embed=embed)
+            await message.channel.send(embed=short_embed)
         except:
-            await message.channel.send(embed=embed)
+            await message.channel.send(embed=short_embed)
 
 # --- 5. 起動実行 ---
 if __name__ == "__main__":
