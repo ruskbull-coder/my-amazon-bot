@@ -122,40 +122,56 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_message(message):
     if message.author.bot: return
     
-    urls = re.findall(r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+', message.content)
+    # 【改良】より広範囲の記号（%, &, =, ?など）を含むURLを正確に抽出する正規表現
+    url_pattern = r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+'
+    urls = re.findall(url_pattern, message.content)
     if not urls: return
 
     target_url = urls[0]
-    # URL以外の純粋なコメントを抽出
-    user_comment = re.sub(r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+', '', message.content).strip()
+    
+    # 【改良】メッセージから「見つかったすべてのURL」を完全に消し去ってからコメントを抽出
+    user_comment = message.content
+    for u in urls:
+        user_comment = user_comment.replace(u, '')
+    user_comment = user_comment.strip()
     
     status_msg = await message.channel.send("⌛ **リンクを確認中...**")
 
-    # A. Amazonの場合
+    # A. Amazon判定
     if "amazon." in target_url or "amzn." in target_url:
         embed = process_amazon(target_url, message.author, user_comment)
         if embed:
-            await message.delete()
-            await status_msg.edit(content=None, embed=embed)
-            return
+            try:
+                await message.delete()
+                await status_msg.edit(content=None, embed=embed)
+                return
+            except: pass
 
-    # B. Amazon以外（80文字以上、またはAliExpressなど）
-    if len(target_url) > 80 or "aliexpress" in target_url:
+    # B. Amazon以外（80文字以上、または特定サイト）
+    # AliExpressなどは短くしても長い場合があるため、ドメインでも判定
+    is_long = len(target_url) > 80
+    is_shopping = any(domain in target_url for domain in ["aliexpress", "rakuten", "yahoo"])
+
+    if is_long or is_shopping:
+        # パラメータ削除後のデータ取得
         title, img, clean_url = get_og_data(target_url)
         domain = re.search(r'https?://([^/]+)', clean_url).group(1)
         
-        desc = f"[{domain} へ移動する]({target_url})"
+        # リンク表示
+        desc = f"[{domain} へ移動する]({clean_url})"
         if user_comment:
-            desc = f"**投稿者のコメント:** {user_comment}\n\n" + desc
+            desc = f"**投稿者のコメント:**\n{user_comment}\n\n" + desc
 
         short_embed = discord.Embed(title=f"🔗 {title}", description=desc, color=0xcccccc)
         if img: short_embed.set_thumbnail(url=img)
-        short_embed.set_footer(text=f"Shared by {message.author.display_name} | パラメータを削除して短縮しました")
+        short_embed.set_footer(text=f"Shared by {message.author.display_name} | パラメータを削除しました")
 
-        await message.delete()
-        await status_msg.edit(content=None, embed=short_embed)
+        try:
+            await message.delete()
+            await status_msg.edit(content=None, embed=short_embed)
+        except: pass
     else:
-        # 短いURLは何もしない
+        # 短いURLはそのまま
         await status_msg.delete()
 
 # --- 5. 実行 ---
