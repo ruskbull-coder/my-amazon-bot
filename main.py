@@ -119,51 +119,59 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
-async def on_ready():
-    print(f'✅ Bot is online as {bot.user}')
-
-@bot.event
 async def on_message(message):
     if message.author.bot: return
     
-    # メッセージ内からURLをすべて抽出
+    # URLを抽出
     urls = re.findall(r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+', message.content)
     if not urls: return
 
-    target_url = urls[0] # 最初に見つけたURLを対象にする
+    target_url = urls[0]
     
-    # --- A. Amazonの場合 (既存の処理) ---
-    if "amazon" in target_url or "amzn" in target_url:
-        print(f"🔎 Amazon検出: {target_url}")
-        embed = process_url(target_url, message.author)
-        if embed:
-            try:
-                await message.delete()
-                await message.channel.send(embed=embed)
-            except:
-                await message.channel.send(embed=embed)
-            return
+    # 【追加】ユーザーが書いたコメントを抽出（URL部分を消す）
+    user_comment = re.sub(r'https?://[\w/:%#\$&\?\(\)~\.=\+\-]+', '', message.content).strip()
+    
+    # 【追加】まず「ロード中」のメッセージを出す
+    status_msg = await message.channel.send("⌛ **Amazonリンクを確認中...**")
 
-    # --- B. Amazon以外で80文字を超えている場合 ---
+    # --- 1. Amazonの場合 ---
+    if "amazon." in target_url or "amzn." in target_url:
+        print(f"🔎 Amazon Detected: {target_url}")
+        embed = process_url(target_url, message.author)
+        
+        if embed:
+            # ユーザーのコメントがあればEmbedに追加
+            if user_comment:
+                embed.description = f"**投稿者のコメント:**\n{user_comment}"
+            
+            try:
+                await message.delete() # 元の投稿を消す
+                await status_msg.edit(content=None, embed=embed) # 「ロード中」を消してEmbedに書き換え
+                return
+            except Exception as e:
+                print(f"❌ Amazon Edit Error: {e}")
+
+    # --- 2. Amazon以外で80文字を超えている場合 ---
     if len(target_url) > 80:
-        print(f"✂️ 長いURLを短縮表示: {len(target_url)}文字")
+        print(f"✂️ Shortening URL")
+        domain_match = re.search(r'https?://([^/]+)', target_url)
+        domain = domain_match.group(1) if domain_match else "External Link"
         
-        # ドメイン名を抽出 (例: www.google.com)
-        domain = re.search(r'https?://([^/]+)', target_url).group(1)
-        
-        # シンプルな埋め込みを作成
-        short_embed = discord.Embed(
-            title="🔗 長いURLを整理しました",
-            description=f"[{domain} へ移動する]({target_url})",
-            color=discord.Color.light_grey()
-        )
-        short_embed.set_footer(text=f"Shared by {message.author.display_name} | 元の長さ: {len(target_url)}文字")
-        
+        desc = f"[{domain} へ移動する]({target_url})"
+        if user_comment:
+            desc = f"**投稿者のコメント:** {user_comment}\n\n" + desc
+
+        short_embed = discord.Embed(title="🔗 URLを整理しました", description=desc, color=0xcccccc)
+        short_embed.set_footer(text=f"Shared by {message.author.display_name}")
+
         try:
             await message.delete()
-            await message.channel.send(embed=short_embed)
-        except:
-            await message.channel.send(embed=short_embed)
+            await status_msg.edit(content=None, embed=short_embed)
+        except Exception as e:
+            print(f"❌ Shorten Edit Error: {e}")
+    else:
+        # 変換対象外（短い普通のURL）だった場合は「ロード中」を消す
+        await status_msg.delete()
 
 # --- 5. 起動実行 ---
 if __name__ == "__main__":
