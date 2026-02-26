@@ -73,26 +73,42 @@ def get_og_data(url):
         return "Link", "", url.split('?')[0]
 
 def scrape_amazon_data(url):
-    """Amazonの商品情報を取得"""
+    """Amazonの商品情報を取得（強化版）"""
     try:
-        time.sleep(1) 
+        time.sleep(1)
         res = requests.Session().get(url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        title = soup.find(id='productTitle')
-        title = title.get_text().strip() if title else "Amazon Product"
+        # タイトル取得（文字数を80に拡張）
+        title_elem = soup.find(id='productTitle') or soup.find('meta', property='og:title')
+        title = title_elem.get_text().strip() if title_elem else "Amazon Product"
+        if hasattr(title_elem, 'get') and title_elem.get('content'): title = title_elem.get('content')
         
-        price_elem = soup.select_one('.a-price .a-offscreen') or soup.select_one('.a-price-whole')
-        price = price_elem.get_text().strip() if price_elem else "N/A"
+        # 価格取得（複数の候補から探す）
+        price = "N/A"
+        price_selectors = [
+            '.a-price .a-offscreen', 
+            '#priceblock_ourprice', 
+            '#priceblock_dealprice',
+            '.a-price-whole',
+            '.a-color-price'
+        ]
+        for selector in price_selectors:
+            p_elem = soup.select_one(selector)
+            if p_elem:
+                price = p_elem.get_text().strip()
+                break
 
+        # 評価取得
         rating = "N/A"
-        r_elem = soup.select_one('span.a-icon-alt')
+        r_elem = soup.select_one('span.a-icon-alt') or soup.select_one('.a-star-count')
         if r_elem:
             m = re.search(r'(\d[\.,]\d)', r_elem.get_text())
-            if m: rating = f"⭐ {m.group(1)}"
+            if m: rating = f"★{m.group(1)}"
 
+        # レビュー数取得
         reviews = "0"
-        rev_elem = soup.find(id='acrCustomerReviewText')
+        rev_elem = soup.find(id='acrCustomerReviewText') or soup.select_one('#atc-reviews')
         if rev_elem:
             c = re.sub(r'\D', '', rev_elem.get_text())
             if c: reviews = "{:,}".format(int(c))
@@ -103,12 +119,13 @@ def scrape_amazon_data(url):
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', res.url)
         asin = asin_match.group(1) if asin_match else None
         
-        return title[:50], price, rating, reviews, img_url, asin
-    except:
+        return title[:80], price, rating, reviews, img_url, asin
+    except Exception as e:
+        print(f"Scraping Error: {e}")
         return None
 
 def process_amazon(url, author, user_comment):
-    """Amazon用UI (言語・通貨自動切り替え)"""
+    """Amazon用UI (バグ対策版)"""
     data = scrape_amazon_data(url)
     if not data: return None
     
@@ -116,8 +133,12 @@ def process_amazon(url, author, user_comment):
     domain = next((d for d in LOCALE_SETTINGS if d in url), "amazon.com")
     config = LOCALE_SETTINGS.get(domain, DEFAULT_LOCALE)
     
+    # 価格表示の整形 (N/Aの場合は記号を出さない)
     clean_price_num = re.sub(r'[^\d\.,]', '', price)
-    display_price = f"{config['currency']}{clean_price_num}" if clean_price_num else price
+    if clean_price_num:
+        display_price = f"{config['currency']}{clean_price_num}"
+    else:
+        display_price = price # N/A ならそのまま表示
 
     clean_url = f"https://{domain}/dp/{asin}" if asin else url.split('?')[0]
     tagged_url = f"{clean_url}?tag={AMAZON_TAG}"
