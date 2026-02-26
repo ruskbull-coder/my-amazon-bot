@@ -28,87 +28,87 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN') or os.getenv('DISCORD_BOT_TOKEN')
 AMAZON_TAG = os.getenv('AMAZON_TAG', 'default-tag-22')
 
-HEADERS = {
+# 基本ブラウザ設定
+BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8', 
 }
 
 # 多言語・通貨設定の辞書
 LOCALE_SETTINGS = {
     "amazon.co.jp": {
-        "lang": "ja", "currency": "￥", "price": "価格", 
+        "accept_lang": "ja-JP,ja;q=0.9",
+        "currency": "￥", "price": "価格", 
         "rating": "評価", "reviews": "レビュー数", "comment": "コメント", "shared": "投稿者"
     },
     "amazon.com": {
-        "lang": "en", "currency": "$", "price": "Price", 
+        "accept_lang": "en-US,en;q=0.9",
+        "currency": "$", "price": "Price", 
         "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
     },
     "amazon.co.uk": {
-        "lang": "en", "currency": "£", "price": "Price", 
+        "accept_lang": "en-GB,en;q=0.9",
+        "currency": "£", "price": "Price", 
         "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
     }
 }
 DEFAULT_LOCALE = {
-    "lang": "en", "currency": "$", "price": "Price", 
+    "accept_lang": "en-US,en;q=0.9",
+    "currency": "$", "price": "Price", 
     "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
 }
 
 # --- 3. 処理関数 ---
 
 def get_og_data(url):
-    """一般サイトのデータ取得 & パラメータ削除"""
+    """一般サイトのデータ取得"""
     try:
         clean_url = url.split('?')[0]
-        res = requests.get(clean_url, headers=HEADERS, timeout=10)
+        res = requests.get(clean_url, headers=BASE_HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
         title_tag = soup.find('meta', property='og:title') or soup.find('title')
         title = title_tag['content'] if title_tag and title_tag.has_attr('content') else (title_tag.text if title_tag else "Link")
-        
         img_tag = soup.find('meta', property='og:image')
         img_url = img_tag['content'] if img_tag else ""
-        
         return title.strip()[:60], img_url, clean_url
     except:
         return "Link", "", url.split('?')[0]
 
 def scrape_amazon_data(url):
-    """Amazonの商品情報を取得（強化版）"""
+    """Amazonの商品情報を取得（言語・バグ対策強化版）"""
     try:
+        # ドメインに応じたヘッダー設定
+        domain = next((d for d in LOCALE_SETTINGS if d in url), "amazon.com")
+        config = LOCALE_SETTINGS.get(domain, DEFAULT_LOCALE)
+        headers = BASE_HEADERS.copy()
+        headers['Accept-Language'] = config['accept_lang']
+        
         time.sleep(1)
-        res = requests.Session().get(url, headers=HEADERS, timeout=15)
+        res = requests.Session().get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # タイトル取得（文字数を80に拡張）
-        title_elem = soup.find(id='productTitle') or soup.find('meta', property='og:title')
+        # タイトル
+        title_elem = soup.find(id='productTitle')
         title = title_elem.get_text().strip() if title_elem else "Amazon Product"
-        if hasattr(title_elem, 'get') and title_elem.get('content'): title = title_elem.get('content')
         
-        # 価格取得（複数の候補から探す）
+        # 価格（複数候補から検索）
         price = "N/A"
-        price_selectors = [
-            '.a-price .a-offscreen', 
-            '#priceblock_ourprice', 
-            '#priceblock_dealprice',
-            '.a-price-whole',
-            '.a-color-price'
-        ]
+        price_selectors = ['.a-price .a-offscreen', '.a-price-whole', '#priceblock_ourprice', '.a-color-price']
         for selector in price_selectors:
             p_elem = soup.select_one(selector)
             if p_elem:
                 price = p_elem.get_text().strip()
                 break
 
-        # 評価取得
+        # 評価
         rating = "N/A"
-        r_elem = soup.select_one('span.a-icon-alt') or soup.select_one('.a-star-count')
+        r_elem = soup.select_one('span.a-icon-alt')
         if r_elem:
             m = re.search(r'(\d[\.,]\d)', r_elem.get_text())
             if m: rating = f"★{m.group(1)}"
 
-        # レビュー数取得
+        # レビュー数
         reviews = "0"
-        rev_elem = soup.find(id='acrCustomerReviewText') or soup.select_one('#atc-reviews')
+        rev_elem = soup.find(id='acrCustomerReviewText')
         if rev_elem:
             c = re.sub(r'\D', '', rev_elem.get_text())
             if c: reviews = "{:,}".format(int(c))
@@ -119,26 +119,25 @@ def scrape_amazon_data(url):
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', res.url)
         asin = asin_match.group(1) if asin_match else None
         
-        return title[:80], price, rating, reviews, img_url, asin
-    except Exception as e:
-        print(f"Scraping Error: {e}")
+        return title[:80], price, rating, reviews, img_url, asin, domain
+    except:
         return None
 
 def process_amazon(url, author, user_comment):
-    """Amazon用UI (バグ対策版)"""
+    """Amazon用UI生成"""
     data = scrape_amazon_data(url)
     if not data: return None
     
-    title, price, rating, reviews, img, asin = data
-    domain = next((d for d in LOCALE_SETTINGS if d in url), "amazon.com")
+    title, price, rating, reviews, img, asin, domain = data
     config = LOCALE_SETTINGS.get(domain, DEFAULT_LOCALE)
     
-    # 価格表示の整形 (N/Aの場合は記号を出さない)
-    clean_price_num = re.sub(r'[^\d\.,]', '', price)
-    if clean_price_num:
-        display_price = f"{config['currency']}{clean_price_num}"
+    # 価格整形（通貨ごとの処理）
+    if config['currency'] == "￥":
+        clean_num = re.sub(r'[^\d]', '', price)
+        display_price = f"{config['currency']}{int(clean_num):,}" if clean_num else price
     else:
-        display_price = price # N/A ならそのまま表示
+        clean_num = re.sub(r'[^\d\.,]', '', price)
+        display_price = f"{config['currency']}{clean_num}" if clean_num else price
 
     clean_url = f"https://{domain}/dp/{asin}" if asin else url.split('?')[0]
     tagged_url = f"{clean_url}?tag={AMAZON_TAG}"
@@ -162,7 +161,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} Online (Exclude List Active)')
+    print(f'✅ {bot.user} Online (Multi-Language & Exclude List Active)')
 
 @bot.event
 async def on_message(message):
@@ -173,19 +172,13 @@ async def on_message(message):
 
     target_url = found_urls[0].lower()
 
-    # --- 【新規追加】除外リスト ---
+    # --- 除外リスト ---
     exclude_domains = [
-        "youtube.com", "youtu.be",      # 動画
-        "twitter.com", "x.com",        # SNS
-        "instagram.com", "tiktok.com",   # SNS
-        "facebook.com",                 # SNS
-        "spotify.com", "apple.com",     # 音楽
-        "twitch.tv", "nicovideo.jp",    # 配信
-        "pixiv.net", "note.com",        # イラスト・記事
-        "discord.com"                   # 内部リンク
+        "youtube.com", "youtu.be", "twitter.com", "x.com", 
+        "instagram.com", "tiktok.com", "facebook.com", 
+        "spotify.com", "apple.com", "twitch.tv", "nicovideo.jp", 
+        "pixiv.net", "note.com", "discord.com"
     ]
-    
-    # 除外対象のドメインが含まれていたら何もしない
     if any(domain in target_url for domain in exclude_domains):
         return
 
@@ -207,7 +200,7 @@ async def on_message(message):
                 return
             except: pass
 
-    # B. Amazon以外 (AliExpress, 楽天, Yahooなど)
+    # B. その他（AliExpressなど）
     if len(target_url) > 60 or any(d in target_url for d in ["aliexpress", "rakuten", "yahoo"]):
         title, img, clean_link = get_og_data(found_urls[0])
         domain_match = re.search(r'https?://([^/]+)', clean_link)
@@ -226,7 +219,6 @@ async def on_message(message):
             await status_msg.edit(content=None, embed=short_embed)
         except: pass
     else:
-        # どちらにも該当しない（短い普通のリンク等）場合はステータスメッセージを消す
         await status_msg.delete()
 
 # --- 5. 実行 ---
