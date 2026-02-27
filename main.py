@@ -8,9 +8,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from threading import Thread
 from flask import Flask
-import time
 import asyncio
-import json
 
 # --- 1. Webサーバー設定 (Render常時稼働用) ---
 app = Flask('')
@@ -38,27 +36,20 @@ BASE_HEADERS = {
 LOCALE_SETTINGS = {
     "amazon.co.jp": {
         "accept_lang": "ja-JP,ja;q=0.9",
-        "currency": "￥", "price": "価格", 
-        "rating": "評価", "reviews": "レビュー数", "comment": "コメント", "shared": "投稿者"
+        "comment": "コメント", "shared": "投稿者"
     },
     "amazon.com": {
         "accept_lang": "en-US,en;q=0.9",
-        "currency": "$", "price": "Price", 
-        "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
-    },
-    "amazon.co.uk": {
-        "accept_lang": "en-GB,en;q=0.9",
-        "currency": "£", "price": "Price", 
-        "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
+        "comment": "Comment", "shared": "Shared by"
     }
 }
 DEFAULT_LOCALE = {
     "accept_lang": "en-US,en;q=0.9",
-    "currency": "$", "price": "Price", 
-    "rating": "Rating", "reviews": "Reviews", "comment": "Comment", "shared": "Shared by"
+    "comment": "Comment", "shared": "Shared by"
 }
 
-# --- 3. キャンセルボタン用 View クラス ---
+# --- 3. View クラス (ボタン管理) ---
+
 class CancelView(View):
     def __init__(self, timeout=30):
         super().__init__(timeout=timeout)
@@ -69,10 +60,27 @@ class CancelView(View):
         self.is_cancelled = True
         self.stop()
         await interaction.response.send_message("❌ 変換をキャンセルしました。", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
+        try: await interaction.message.delete()
+        except: pass
+
+class PostProcessView(View):
+    def __init__(self, original_content, author_id, timeout=None):
+        super().__init__(timeout=timeout)
+        self.original_content = original_content
+        self.author_id = author_id
+
+    @discord.ui.button(label="🗑️ 削除 (Delete)", style=discord.ButtonStyle.danger)
+    async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("投稿者本人のみ削除可能です。", ephemeral=True)
+        await interaction.message.delete()
+
+    @discord.ui.button(label="↩️ 変換を戻す (Undo)", style=discord.ButtonStyle.secondary)
+    async def undo_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("投稿者本人のみ操作可能です。", ephemeral=True)
+        await interaction.message.delete()
+        await interaction.channel.send(self.original_content)
 
 # --- 4. 処理関数 ---
 
@@ -103,73 +111,28 @@ def scrape_amazon_data(url):
         title_elem = soup.find(id='productTitle')
         title = title_elem.get_text().strip() if title_elem else "Amazon Product"
         
-        # 高画質画像抽出
         img_url = ""
         scripts = soup.find_all('script')
         for s in scripts:
             if 'colorImages' in s.text:
                 m = re.search(r'"hiRes":"(https://[^"]+\.jpg)"', s.text)
-                if m:
-                    img_url = m.group(1)
-                    break
+                if m: img_url = m.group(1); break
         
         if not img_url:
             img = soup.find(id='landingImage') or soup.find('meta', property='og:image')
             img_url = img.get('src') if img and not img.get('content') else (img.get('content') if img else "")
 
-        # 価格取得
-        price = "N/A"
-        price_selectors = [
-            'span.a-price span.a-offscreen', 
-            '#priceblock_ourprice', 
-            '#priceblock_dealprice', 
-            '.a-color-price',
-            '#kindle-price'
-        ]
-        for selector in price_selectors:
-            p_elem = soup.select_one(selector)
-            if p_elem and p_elem.get_text().strip():
-                price = p_elem.get_text().strip()
-                break
-
-        # 評価
-        rating = "N/A"
-        r_elem = soup.select_one('span.a-icon-alt')
-        if r_elem:
-            m = re.search(r'(\d[\.,]\d)', r_elem.get_text())
-            if m: rating = f"★{m.group(1)}"
-
-        # レビュー数
-        reviews = "0"
-        rev_elem = soup.find(id='acrCustomerReviewText')
-        if rev_elem:
-            c = re.sub(r'\D', '', rev_elem.get_text())
-            if c: reviews = "{:,}".format(int(c))
-        
-        # ASIN
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', res.url)
         asin = asin_match.group(1) if asin_match else None
         
-        return title[:80], price, rating, reviews, img_url, asin, domain
-    except Exception as e:
-        print(f"Scraping Error: {e}")
-        return "Amazon Product (Load Error)", "Check Link", "N/A", "0", "", None, "amazon.co.jp"
+        return title[:80], img_url, asin, domain
+    except:
+        return "Amazon Product", "", None, "amazon.co.jp"
 
 def process_amazon(url, author, user_comment):
-    data = scrape_amazon_data(url)
-    if not data: return None
-    
-    title, price, rating, reviews, img, asin, domain = data
+    title, img, asin, domain = scrape_amazon_data(url)
     config = LOCALE_SETTINGS.get(domain, DEFAULT_LOCALE)
     
-    # 価格の整数化
-    if config['currency'] == "￥":
-        clean_num = re.sub(r'\D', '', price) 
-        display_price = f"{config['currency']}{int(clean_num):,}" if clean_num else price
-    else:
-        clean_num = re.sub(r'[^\d\.,]', '', price)
-        display_price = f"{config['currency']}{clean_num}" if clean_num else price
-
     clean_url = f"https://{domain}/dp/{asin}" if asin else url.split('?')[0]
     tagged_url = f"{clean_url}?tag={AMAZON_TAG}"
     
@@ -177,11 +140,8 @@ def process_amazon(url, author, user_comment):
     if user_comment:
         embed.description = f"**{config['comment']}:**\n{user_comment}"
     
-    embed.add_field(name=config['price'], value=display_price, inline=True)
-    embed.add_field(name=config['rating'], value=rating, inline=True)
-    embed.add_field(name=config['reviews'], value=reviews, inline=True)
-    
-    if img: embed.set_image(url=img) # 画像を大きく表示
+    # 画像を右側に小さく表示 (set_thumbnail)
+    if img: embed.set_thumbnail(url=img)
     embed.set_footer(text=f"{config['shared']} {author.display_name} | {domain}")
     return embed
 
@@ -194,7 +154,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'======================================')
     print(f'✅ {bot.user} Online')
-    print(f'🚀 VERSION: 4.2 (STEAM EXCLUDE ADDED)')
+    print(f'🚀 VERSION: 4.4 (Compact Mode)')
     print(f'======================================')
 
 @bot.event
@@ -204,24 +164,15 @@ async def on_message(message):
     found_urls = re.findall(r'https?://[^\s]+', message.content)
     if not found_urls: return
 
-    # --- 二重投稿・競合対策の待機 ---
     await asyncio.sleep(0.5)
-
     target_url = found_urls[0].lower()
     
-    # 除外リスト (SNS, YouTube, Steam)
-    exclude_domains = [
-        "youtube.com", "youtu.be", 
-        "twitter.com", "x.com", 
-        "instagram.com", "tiktok.com",
-        "steampowered.com", "steamcommunity.com"
-    ]
+    # 除外リスト
+    exclude_domains = ["youtube.com", "youtu.be", "twitter.com", "x.com", "instagram.com", "tiktok.com", "steampowered.com", "steamcommunity.com"]
     if any(domain in target_url for domain in exclude_domains): return
 
-    # キャンセルボタン付きステータスメッセージ
-    domain_label = next((d for d in LOCALE_SETTINGS if d in target_url), "Amazon")
     view = CancelView()
-    status_msg = await message.channel.send(f"⌛ **Analyzing {domain_label}...**", view=view)
+    status_msg = await message.channel.send(f"⌛ **Analyzing...**", view=view)
     
     clean_comment = message.content
     for u in found_urls:
@@ -236,8 +187,9 @@ async def on_message(message):
 
         if embed:
             try:
+                post_view = PostProcessView(original_content=message.content, author_id=message.author.id)
                 await message.delete()
-                await status_msg.edit(content=None, embed=embed, view=None)
+                await status_msg.edit(content=None, embed=embed, view=post_view)
                 return
             except: pass
 
@@ -257,8 +209,9 @@ async def on_message(message):
         short_embed.set_footer(text=f"Shared by {message.author.display_name}")
 
         try:
+            post_view = PostProcessView(original_content=message.content, author_id=message.author.id)
             await message.delete()
-            await status_msg.edit(content=None, embed=short_embed, view=None)
+            await status_msg.edit(content=None, embed=short_embed, view=post_view)
         except: pass
     else:
         if not view.is_cancelled:
