@@ -10,13 +10,15 @@ from threading import Thread
 from flask import Flask
 import asyncio
 
-# --- 1. Webサーバー設定 (Render常時稼働用) ---
+# --- 1. Webサーバー設定 (Koyeb Health Check用) ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is running!"
+def home():
+    return "Bot is running! Presence: Online"
 
 def run_web():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
@@ -48,20 +50,39 @@ DEFAULT_LOCALE = {
     "comment": "Comment", "shared": "Shared by"
 }
 
-# --- 3. View クラス (ボタン管理) ---
+# --- 3. View クラス ---
 
 class CancelView(View):
-    def __init__(self, timeout=30):
+    def __init__(self, original_content, author_id, timeout=30):
         super().__init__(timeout=timeout)
         self.is_cancelled = False
+        self.original_content = original_content
+        self.author_id = author_id
+        self.status_msg = None 
 
     @discord.ui.button(label="キャンセル (Cancel)", style=discord.ButtonStyle.danger)
     async def cancel_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 投稿者本人のみキャンセル可能にするセキュリティ対応
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("投稿者本人のみキャンセル可能です。", ephemeral=True)
+
         self.is_cancelled = True
         self.stop()
-        await interaction.response.send_message("❌ 変換をキャンセルしました。", ephemeral=True)
-        try: await interaction.message.delete()
-        except: pass
+        
+        # 1. ボットの一時メッセージ（Analyzing...）を削除
+        if self.status_msg:
+            try: await self.status_msg.delete()
+            except: pass
+        else:
+            try: await interaction.message.delete()
+            except: pass
+
+        # 2. 【核心】ボット名義ではなく、ユーザーの元の投稿をチャットに再送信してプレビューを復活させる
+        # ※ Webhookを使わない最も安定した方法として、テキストを再投下します
+        await interaction.channel.send(self.original_content)
+        
+        # 完了通知（本人にのみ通知）
+        await interaction.response.send_message("❌ 変換をキャンセルし、元の状態に戻しました。", ephemeral=True)
 
 class PostProcessView(View):
     def __init__(self, original_content, author_id, timeout=None):
@@ -86,8 +107,8 @@ class PostProcessView(View):
 
 def get_og_data(url):
     try:
-        clean_url = url.split('?')[0]
-        res = requests.get(clean_url, headers=BASE_HEADERS, timeout=10)
+        res = requests.get(url, headers=BASE_HEADERS, timeout=10, allow_redirects=True)
+        clean_url = res.url.split('?')[0]
         soup = BeautifulSoup(res.text, 'html.parser')
         title_tag = soup.find('meta', property='og:title') or soup.find('title')
         title = title_tag['content'] if title_tag and title_tag.has_attr('content') else (title_tag.text if title_tag else "Link")
@@ -99,13 +120,25 @@ def get_og_data(url):
 
 def scrape_amazon_data(url):
     try:
-        domain = next((d for d in LOCALE_SETTINGS if d in url), "amazon.com")
+        asin_match = re.search(r'/(?:dp|gp/product|product|ASIN)/([A-Z0-9]{10})', url)
+        target_asin = asin_match.group(1) if asin_match else None
+        
+        domain = next((d for d in LOCALE_SETTINGS if d in url.lower()), "amazon.co.jp")
+        
+        if target_asin and "amzn." not in url:
+            request_url = f"https://{domain}/dp/{target_asin}"
+        else:
+            request_url = url
+
+        session = requests.Session()
+        res = session.get(request_url, headers=BASE_HEADERS, timeout=15, allow_redirects=True)
+        final_url = res.url
+        
         config = LOCALE_SETTINGS.get(domain, DEFAULT_LOCALE)
         headers = BASE_HEADERS.copy()
         headers['Accept-Language'] = config['accept_lang']
         
-        session = requests.Session()
-        res = session.get(url, headers=headers, timeout=15)
+        res = session.get(final_url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
         title_elem = soup.find(id='productTitle')
@@ -116,17 +149,20 @@ def scrape_amazon_data(url):
         for s in scripts:
             if 'colorImages' in s.text:
                 m = re.search(r'"hiRes":"(https://[^"]+\.jpg)"', s.text)
-                if m: img_url = m.group(1); break
+                if m:
+                    img_url = m.group(1)
+                    break
         
         if not img_url:
             img = soup.find(id='landingImage') or soup.find('meta', property='og:image')
             img_url = img.get('src') if img and not img.get('content') else (img.get('content') if img else "")
 
-        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', res.url)
-        asin = asin_match.group(1) if asin_match else None
+        asin_match_final = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', final_url)
+        asin = asin_match_final.group(1) if asin_match_final else target_asin
         
         return title[:80], img_url, asin, domain
-    except:
+    except Exception as e:
+        print(f"Scrape Error: {e}")
         return "Amazon Product", "", None, "amazon.co.jp"
 
 def process_amazon(url, author, user_comment):
@@ -140,12 +176,12 @@ def process_amazon(url, author, user_comment):
     if user_comment:
         embed.description = f"**{config['comment']}:**\n{user_comment}"
     
-    # 画像を右側に小さく表示 (set_thumbnail)
-    if img: embed.set_thumbnail(url=img)
+    if img:
+        embed.set_thumbnail(url=img)
     embed.set_footer(text=f"{config['shared']} {author.display_name} | {domain}")
     return embed
 
-# --- 5. Botメインロジック ---
+# --- 5. Botロジック ---
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -154,7 +190,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'======================================')
     print(f'✅ {bot.user} Online')
-    print(f'🚀 VERSION: 4.4 (Compact Mode)')
+    print(f'🚀 VERSION: 4.8 (Cancel Restore Fixed)')
     print(f'======================================')
 
 @bot.event
@@ -167,19 +203,20 @@ async def on_message(message):
     await asyncio.sleep(0.5)
     target_url = found_urls[0].lower()
     
-    # 除外リスト
     exclude_domains = ["youtube.com", "youtu.be", "twitter.com", "x.com", "instagram.com", "tiktok.com", "steampowered.com", "steamcommunity.com"]
     if any(domain in target_url for domain in exclude_domains): return
 
-    view = CancelView()
+    # 元のメッセージ内容と投稿者IDをCancelViewに引き渡す
+    view = CancelView(original_content=message.content, author_id=message.author.id)
     status_msg = await message.channel.send(f"⌛ **Analyzing...**", view=view)
+    view.status_msg = status_msg 
     
     clean_comment = message.content
     for u in found_urls:
         clean_comment = clean_comment.replace(u, "")
     clean_comment = clean_comment.strip()
 
-    if "amazon." in target_url or "amzn." in target_url:
+    if any(x in target_url for x in ["amazon.", "amzn."]):
         loop = asyncio.get_event_loop()
         embed = await loop.run_in_executor(None, process_amazon, found_urls[0], message.author, clean_comment)
         
@@ -215,8 +252,10 @@ async def on_message(message):
         except: pass
     else:
         if not view.is_cancelled:
-            await status_msg.delete()
+            try: await status_msg.delete()
+            except: pass
 
 if __name__ == "__main__":
     keep_alive()
-    bot.run(TOKEN)
+    if TOKEN:
+        bot.run(TOKEN)
