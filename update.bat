@@ -11,7 +11,7 @@ set /p msg="Enter commit message (e.g. Fixed image): "
 git commit -m "%msg%"
 
 echo 3. Pushing to GitHub...
-git push origin main
+git push origin main --force
 
 echo =======================================
 echo   Update Complete! Check Render Logs.
