@@ -115,23 +115,26 @@ class CancelView(View):
 
 
 class PostProcessView(View):
-    def __init__(self, original_content, author_id, timeout=None):
+    def __init__(self, original_content, author_id, author: discord.Member | discord.User, timeout=None):
         super().__init__(timeout=timeout)
         self.original_content = original_content
         self.author_id = author_id
+        self.author = author
 
     @discord.ui.button(label="🗑️ 削除 (Delete)", style=discord.ButtonStyle.danger)
     async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
             return await interaction.response.send_message("投稿者本人のみ削除可能です。", ephemeral=True)
         await interaction.message.delete()
+        await interaction.response.send_message("🗑️ 投稿を削除しました。", ephemeral=True)
 
     @discord.ui.button(label="↩️ 変換を戻す (Undo)", style=discord.ButtonStyle.secondary)
     async def undo_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
             return await interaction.response.send_message("投稿者本人のみ操作可能です。", ephemeral=True)
         await interaction.message.delete()
-        await interaction.channel.send(self.original_content)
+        await restore_as_user(interaction.channel, self.author, self.original_content)
+        await interaction.response.send_message("↩️ 元の状態に戻しました。", ephemeral=True)
 
 # --- 4. 処理関数 ---
 
@@ -258,7 +261,7 @@ async def on_message(message):
 
         if embed:
             try:
-                post_view = PostProcessView(original_content=message.content, author_id=message.author.id)
+                post_view = PostProcessView(original_content=message.content, author_id=message.author.id, author=message.author)
                 await message.delete()
                 await status_msg.edit(content=None, embed=embed, view=post_view)
                 return
@@ -280,7 +283,7 @@ async def on_message(message):
         short_embed.set_footer(text=f"Shared by {message.author.display_name}")
 
         try:
-            post_view = PostProcessView(original_content=message.content, author_id=message.author.id)
+            post_view = PostProcessView(original_content=message.content, author_id=message.author.id, author=message.author)
             await message.delete()
             await status_msg.edit(content=None, embed=short_embed, view=post_view)
         except: pass
