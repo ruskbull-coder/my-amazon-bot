@@ -52,37 +52,67 @@ DEFAULT_LOCALE = {
 
 # --- 3. View クラス ---
 
+async def restore_as_user(channel, user: discord.Member | discord.User, content: str):
+    """
+    Webhookを使って、指定ユーザーの名前・アイコンでメッセージを再送信する。
+    Webhookが作れない場合はボット名義にフォールバックする。
+    """
+    try:
+        # チャンネルのWebhook一覧を取得（なければ新規作成）
+        webhooks = await channel.webhooks()
+        webhook = discord.utils.get(webhooks, name="RestoreBot")
+        if webhook is None:
+            webhook = await channel.create_webhook(name="RestoreBot")
+
+        await webhook.send(
+            content=content,
+            username=user.display_name,
+            avatar_url=user.display_avatar.url,
+        )
+    except discord.Forbidden:
+        # Webhook権限がない場合はボット名義で代替
+        await channel.send(f"[{user.display_name}の投稿を復元]\n{content}")
+    except Exception as e:
+        print(f"Webhook Error: {e}")
+        await channel.send(content)
+
+
 class CancelView(View):
-    def __init__(self, original_content, author_id, timeout=30):
+    def __init__(self, original_content, author_id, author: discord.Member | discord.User, timeout=30):
         super().__init__(timeout=timeout)
         self.is_cancelled = False
         self.original_content = original_content
         self.author_id = author_id
+        self.author = author          # ← Webhookで名前・アイコンに使う
         self.status_msg = None 
 
     @discord.ui.button(label="キャンセル (Cancel)", style=discord.ButtonStyle.danger)
     async def cancel_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 投稿者本人のみキャンセル可能にするセキュリティ対応
+        # 投稿者本人のみキャンセル可能
         if interaction.user.id != self.author_id:
             return await interaction.response.send_message("投稿者本人のみキャンセル可能です。", ephemeral=True)
 
         self.is_cancelled = True
         self.stop()
-        
+
         # 1. ボットの一時メッセージ（Analyzing...）を削除
         if self.status_msg:
-            try: await self.status_msg.delete()
-            except: pass
+            try:
+                await self.status_msg.delete()
+            except:
+                pass
         else:
-            try: await interaction.message.delete()
-            except: pass
+            try:
+                await interaction.message.delete()
+            except:
+                pass
 
-        # 2. 【核心】ボット名義ではなく、ユーザーの元の投稿をチャットに再送信してプレビューを復活させる
-        # ※ Webhookを使わない最も安定した方法として、テキストを再投下します
-        await interaction.channel.send(self.original_content)
-        
-        # 完了通知（本人にのみ通知）
+        # 2. Webhookで本人名義・アイコンのまま元のメッセージを復元
+        await restore_as_user(interaction.channel, self.author, self.original_content)
+
+        # 完了通知（本人にのみ表示）
         await interaction.response.send_message("❌ 変換をキャンセルし、元の状態に戻しました。", ephemeral=True)
+
 
 class PostProcessView(View):
     def __init__(self, original_content, author_id, timeout=None):
@@ -190,7 +220,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'======================================')
     print(f'✅ {bot.user} Online')
-    print(f'🚀 VERSION: 4.8 (Cancel Restore Fixed)')
+    print(f'🚀 VERSION: 4.9 (Webhook Cancel Restore)')
     print(f'======================================')
 
 @bot.event
@@ -206,8 +236,12 @@ async def on_message(message):
     exclude_domains = ["youtube.com", "youtu.be", "twitter.com", "x.com", "instagram.com", "tiktok.com", "steampowered.com", "steamcommunity.com"]
     if any(domain in target_url for domain in exclude_domains): return
 
-    # 元のメッセージ内容と投稿者IDをCancelViewに引き渡す
-    view = CancelView(original_content=message.content, author_id=message.author.id)
+    # author を CancelView に渡す（Webhook復元に使用）
+    view = CancelView(
+        original_content=message.content,
+        author_id=message.author.id,
+        author=message.author,
+    )
     status_msg = await message.channel.send(f"⌛ **Analyzing...**", view=view)
     view.status_msg = status_msg 
     
