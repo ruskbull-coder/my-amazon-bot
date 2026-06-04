@@ -351,13 +351,12 @@ def build_amazon_embed(
 
     embed = discord.Embed(title=title, url=tagged, color=color)
 
-    desc_parts = []
+    desc_parts = [f"**🔗 URL:** [{clean_url}]({tagged})"]
     if user_comment:
         desc_parts.append(f"**{config['comment']}:**\n{user_comment}")
     if price:
         desc_parts.append(f"💴 **{price}**" if domain == "amazon.co.jp" else f"💵 **{price}**")
-    if desc_parts:
-        embed.description = "\n\n".join(desc_parts)
+    embed.description = "\n\n".join(desc_parts)
 
     if img:
         embed.set_thumbnail(url=img)
@@ -389,9 +388,10 @@ def build_url_embed(
         DEFAULT_COLOR,
     )
 
-    desc = f"[{domain}]({clean_link})"
+    desc_parts = [f"**🔗 URL:** [{domain}]({clean_link})"]
     if user_comment:
-        desc = f"**Comment:**\n{user_comment}\n\n" + desc
+        desc_parts.append(f"**Comment:**\n{user_comment}")
+    desc = "\n\n".join(desc_parts)
 
     embed = discord.Embed(title=f"🔗 {title}", description=desc, color=color)
     if img:
@@ -489,7 +489,17 @@ async def on_message(message: discord.Message):
         )
         try:
             await message.delete()
-            await status_msg.edit(content=None, embed=embed, view=post_view)
+            await status_msg.delete()
+            wh = await get_or_create_webhook(message.channel)
+            if wh:
+                await wh.send(
+                    embed=embed,
+                    view=post_view,
+                    username=message.author.display_name,
+                    avatar_url=message.author.display_avatar.url,
+                )
+            else:
+                await message.channel.send(embed=embed, view=post_view)
         except Exception as e:
             log.error(f"メッセージ差替え失敗: {e}")
 
@@ -516,7 +526,17 @@ async def on_message(message: discord.Message):
         )
         try:
             await message.delete()
-            await status_msg.edit(content=None, embed=embed, view=post_view)
+            await status_msg.delete()
+            wh = await get_or_create_webhook(message.channel)
+            if wh:
+                await wh.send(
+                    embed=embed,
+                    view=post_view,
+                    username=message.author.display_name,
+                    avatar_url=message.author.display_avatar.url,
+                )
+            else:
+                await message.channel.send(embed=embed, view=post_view)
         except Exception as e:
             log.error(f"メッセージ差替え失敗: {e}")
 
