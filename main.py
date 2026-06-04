@@ -351,12 +351,11 @@ def build_amazon_embed(
 
     embed = discord.Embed(title=title, url=tagged, color=color)
 
-    desc_parts = [f"**🔗 URL:** [{clean_url}]({tagged})"]
+    desc_parts = []
     if user_comment:
         desc_parts.append(f"**{config['comment']}:**\n{user_comment}")
-    if price:
-        desc_parts.append(f"💴 **{price}**" if domain == "amazon.co.jp" else f"💵 **{price}**")
-    embed.description = "\n\n".join(desc_parts)
+    if desc_parts:
+        embed.description = "\n\n".join(desc_parts)
 
     if img:
         embed.set_thumbnail(url=img)
@@ -376,27 +375,28 @@ def build_url_embed(
 
     # もしもアフィリエイト経由のリンクに変換
     # 形式: https://af.moshimo.com/af/c/click?a_id=XXXX&p_id=YYY&url=元URL(URLエンコード)
+    final_url = clean_link
     if RAKUTEN_TAG and "rakuten.co.jp" in domain:
         encoded = quote(clean_link, safe='')
-        clean_link = f"https://af.moshimo.com/af/c/click?a_id={RAKUTEN_TAG}&p_id=54&pc_id=54&pl_id=616&url={encoded}"
+        final_url = f"https://af.moshimo.com/af/c/click?a_id={RAKUTEN_TAG}&p_id=54&pc_id=54&pl_id=616&url={encoded}"
     elif YAHOO_TAG and "yahoo.co.jp" in domain:
         encoded = quote(clean_link, safe='')
-        clean_link = f"https://af.moshimo.com/af/c/click?a_id={YAHOO_TAG}&p_id=1&pc_id=1&pl_id=1&url={encoded}"
+        final_url = f"https://af.moshimo.com/af/c/click?a_id={YAHOO_TAG}&p_id=1&pc_id=1&pl_id=1&url={encoded}"
 
     color = next(
         (v for k, v in DOMAIN_COLORS.items() if k in domain),
         DEFAULT_COLOR,
     )
 
-    desc_parts = [f"**🔗 URL:** [{domain}]({clean_link})"]
+    # Amazonと同じ形式：タイトルはクリック可能なURLに
+    embed = discord.Embed(title=title, url=final_url, color=color)
+    
     if user_comment:
-        desc_parts.append(f"**Comment:**\n{user_comment}")
-    desc = "\n\n".join(desc_parts)
-
-    embed = discord.Embed(title=f"🔗 {title}", description=desc, color=color)
+        embed.description = f"**Comment:**\n{user_comment}"
+    
     if img:
         embed.set_thumbnail(url=img)
-    embed.set_footer(text=f"Shared by {author.display_name}")
+    embed.set_footer(text=f"Shared by {author.display_name} | {domain}")
     stats["url"] += 1
     return embed
 
