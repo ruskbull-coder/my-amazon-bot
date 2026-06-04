@@ -129,7 +129,31 @@ async def restore_as_user(
     user: discord.Member | discord.User,
     content: str,
 ) -> None:
-    """投稿者の名前・アイコンでメッセージを復元する。"""
+    """投稿者の名前・アイコンでメッセージを復元する。URLが含まれていれば OGP Embed も自動生成。"""
+    embeds: list[discord.Embed] = []
+    
+    # URLを抽出してOGP Embedを生成
+    found_urls = re.findall(r'https?://[^\s]+', content)
+    if found_urls:
+        loop = asyncio.get_running_loop()
+        try:
+            title, img, clean_url = await loop.run_in_executor(
+                None, get_og_data, found_urls[0]
+            )
+            domain_match = re.search(r'https?://([^/]+)', clean_url)
+            domain = domain_match.group(1) if domain_match else "Link"
+            color = next(
+                (v for k, v in DOMAIN_COLORS.items() if k in domain),
+                DEFAULT_COLOR,
+            )
+            embed = discord.Embed(title=f"🔗 {title}", url=clean_url, color=color)
+            if img:
+                embed.set_thumbnail(url=img)
+            embed.set_footer(text=f"Shared by {user.display_name}")
+            embeds.append(embed)
+        except Exception as e:
+            log.warning(f"OGP取得失敗（復元時）: {e}")
+    
     wh = await get_or_create_webhook(channel)
     if wh:
         try:
@@ -137,12 +161,16 @@ async def restore_as_user(
                 content=content,
                 username=user.display_name,
                 avatar_url=user.display_avatar.url,
+                embeds=embeds,
             )
             return
         except Exception as e:
             log.error(f"Webhook送信エラー: {e}")
     # フォールバック
-    await channel.send(f"[{user.display_name} の投稿を復元]\n{content}")
+    if embeds:
+        await channel.send(f"[{user.display_name} の投稿を復元]\n{content}", embeds=embeds)
+    else:
+        await channel.send(f"[{user.display_name} の投稿を復元]\n{content}")
 
 # =============================================================================
 # View クラス
