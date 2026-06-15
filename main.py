@@ -29,6 +29,7 @@ URL_LONG_THRESHOLD = 60      # この文字数以上のURLをEmbedに変換す�
 EXCLUDE_DOMAINS = [
     "youtube.com", "youtu.be", "twitter.com", "x.com",
     "instagram.com", "tiktok.com", "steampowered.com", "steamcommunity.com",
+    "tenor.com", "giphy.com", "imgur.com",  # GIF・画像サービス
 ]
 
 # ドメインごとのEmbed色
