@@ -24,7 +24,7 @@ VERSION = "5.0"
 ANALYZING_TIMEOUT = 30       # キャンセルボタンの表示秒数
 SCRAPE_TIMEOUT    = 15       # スクレイピングのタイムアウト秒数
 OG_TIMEOUT        = 10       # OGP取得のタイムアウト秒数
-URL_LONG_THRESHOLD = 60      # この文字数以上のURLをEmbedに変換する
+URL_LONG_THRESHOLD = 100      # この文字数以上のURLをEmbedに変換する
 
 EXCLUDE_DOMAINS = [
     "youtube.com", "youtu.be", "twitter.com", "x.com",
@@ -204,19 +204,17 @@ class CancelView(View):
         self.stop()
         stats["cancel"] += 1
 
-        # まず interaction に応答してから削除（順序バグ対策）
+        # まず interaction に応答
         await interaction.response.send_message(
-            "❌ 変換をキャンセルし、元の状態に戻しました。", ephemeral=True
+            "❌ キャンセルしました。元のメッセージを保持します。", ephemeral=True
         )
 
-        target = self.status_msg or interaction.message
-        if target:
+        # status_msg（Analyzing...）だけ削除、元のメッセージは保持
+        if self.status_msg:
             try:
-                await target.delete()
+                await self.status_msg.delete()
             except Exception as e:
-                log.warning(f"メッセージ削除失敗: {e}")
-
-        await restore_as_user(interaction.channel, self.author, self.original_content)
+                log.warning(f"status_msg削除失敗: {e}")
 
 
 class PostProcessView(View):
@@ -251,9 +249,9 @@ class PostProcessView(View):
                 "投稿者本人のみ操作可能です。", ephemeral=True
             )
         stats["undo"] += 1
-        await interaction.response.send_message("↩️ 元の状態に戻しました。", ephemeral=True)
+        await interaction.response.send_message("↩️ このメッセージを削除します。元のメッセージを参照してください。", ephemeral=True)
+        # ボットが送信したEmbed付きメッセージだけ削除、元のメッセージは保持
         await interaction.message.delete()
-        await restore_as_user(interaction.channel, self.author, self.original_content)
 
 # =============================================================================
 # スクレイピング / OGP取得
