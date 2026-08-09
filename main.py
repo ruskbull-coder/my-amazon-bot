@@ -30,7 +30,11 @@ EXCLUDE_DOMAINS = [
     "youtube.com", "youtu.be", "twitter.com", "x.com",
     "instagram.com", "tiktok.com", "steampowered.com", "steamcommunity.com",
     "tenor.com", "giphy.com", "imgur.com",  # GIF・画像サービス
+    "discordapp.com", "discordapp.net",    # Discordメディアサーバーを追加
 ]
+
+# スキップ対象とする拡張子
+IGNORE_EXTENSIONS = ('.gif', '.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm')
 
 # ドメインごとのEmbed色
 DOMAIN_COLORS = {
@@ -449,6 +453,11 @@ async def on_message(message: discord.Message):
     target_url = found_urls[0].lower()
 
     if any(d in target_url for d in EXCLUDE_DOMAINS):
+        return
+
+# パラメータ(?...)を除去して拡張子チェック
+    clean_path = target_url.split('?')[0]
+    if clean_path.endswith(IGNORE_EXTENSIONS):
         return
 
     # コメント抽出（URLを除いたテキスト）
